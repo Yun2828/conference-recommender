@@ -1,0 +1,11 @@
+nltk==3.9.1
+pandas==2.2.3
+scikit_learn==1.5.2
+scipy==1.14.1
+sentence_transformers==3.2.0
+streamlit==1.40.1
+streamlit-calendar==1.2.0
+scholarly==1.7.11
+selenium==4.27.1
+beautifulsoup4==4.12.3
+urllib3==2.2.3
