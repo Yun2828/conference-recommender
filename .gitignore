@@ -1,17 +1,37 @@
+# Ignore everything by default
+*
+
+# Keep this file
+!.gitignore
+
+# Keep README files
+!README.md
+!README.docx
+
+# Keep Streamlit app folder
+!Streamlit Application/
+!Streamlit Application/**
+
+# Keep Other Python Files folder
+!Other Python Files/
+!Other Python Files/**
+
+# Ignore virtual environments anywhere
+.venv/
+venv/
+**/.venv/
+**/venv/
+
 # macOS
 .DS_Store
-
-# Videos / large demo files
-*.mp4
-*.mov
-*.avi
-*.mkv
+**/.DS_Store
 
 # Python
 __pycache__/
+**/__pycache__/
 *.pyc
-.venv/
-venv/
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
 
 # Node
 node_modules/
@@ -19,15 +39,32 @@ node_modules/
 dist/
 build/
 
-# Environment variables
+# Environment variables / secrets
 .env
 .env.local
 .env.example
+*.env
+secrets.toml
+.streamlit/secrets.toml
+**/.streamlit/secrets.toml
 
 # Logs
 *.log
 
-# Documents / binaries
+# Videos / large demo files
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# Large/generated ML files
+*.pkl
+*.joblib
+*.pt
+*.h5
+*.onnx
+
+# Common binary documents, but allow README.docx above
 *.pdf
 *.exe
 *.xlsx
@@ -38,3 +75,4 @@ build/
 *.pptx
 *.doc
 *.docx
+!README.docx
