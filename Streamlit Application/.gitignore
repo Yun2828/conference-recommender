@@ -33,7 +33,6 @@ build/
 *.xlsx
 *.xls
 *.xlsm
-*.csv
 *.ppt
 *.pptx
 *.doc
