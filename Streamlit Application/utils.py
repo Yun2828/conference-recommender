@@ -15,6 +15,13 @@ from selenium.webdriver.common.proxy import Proxy, ProxyType
 import requests
 from bs4 import BeautifulSoup
 import urllib.parse
+import io
+import re
+import time
+from pypdf import PdfReader
+from docx import Document
+import fitz
+import pdfplumber
 
 import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
@@ -24,8 +31,8 @@ nltk.download('punkt_tab')
 nltk.download('averaged_perceptron_tagger_eng')
 nltk.download('wordnet')
 
-#--------------------------------------------------------------------------------------------------
-#Embedding class
+# --------------------------------------------------------------------------------------------------
+# Embedding class
 class EmbModel:
     def __init__(self, name, doChunk):
         self.name = name
@@ -38,10 +45,10 @@ class EmbModel:
             self.embedding = embedding_array
         else:
             raise TypeError("embedding must be a numpy ndarray.")
-        
-#---------------------------------------------------------------------------------------------------
-#Specific Return Functions
-#Function which returns matching words and colors based on score
+
+# ---------------------------------------------------------------------------------------------------
+# Specific Return Functions
+# Function which returns matching words and colors based on score
 def get_matching_score_text(score, dict_1, color = False):
     """
     Returns the matching score text with appropriate color highlighting based on the score.
@@ -70,8 +77,8 @@ def get_matching_score_text(score, dict_1, color = False):
         else:
             return poor_clr
 
-#-------------------------------------------------------------------------------------------------------------------
-#Data Processing Functions
+# -------------------------------------------------------------------------------------------------------------------
+# Data Processing Functions
 def agg_session(df):
     df = df.groupby(by='session_id').mean('cosine_similarity')
     df = merge_session_times(df)
@@ -100,7 +107,7 @@ def merge_session_times(df):
     df['end_time'] = df['end_datetime'].dt.strftime('%I:%M %p')
     return (df)
 
-#Getting the best abstracts for a given string
+# Getting the best abstracts for a given string
 def get_best_abstracts(string):
     embeddings = st.session_state.embeddings.embedding
     embedding_model = st.session_state.embedding_model
@@ -152,8 +159,8 @@ def get_best_abstracts(string):
 
     return merge_session_times(output_df)
 
-#---------------------------------------------------------------------------------------------------------------
-#Schedule display functions
+# ---------------------------------------------------------------------------------------------------------------
+# Schedule display functions
 
 def get_schedule(df, print_results = True):
         schedule_df = create_schedule(df)
@@ -259,7 +266,7 @@ def display_schedule(schedule_dict, print_results = True):
                     st.write(f"**Abstract**: {prow['abstract']}")
                     j = j + 1
 
-#Function which creates a schedule based on sesion ranks
+# Function which creates a schedule based on sesion ranks
 def create_schedule(df):
   """
   Creates a non-overlapping schedule based on a score.
@@ -316,8 +323,8 @@ def convert_df_to_events(df):
     events.append(event)
   return events
 
-#--------------------------------------------------------------------------------------------------------------------------------
-#Text Splitting Functions
+# --------------------------------------------------------------------------------------------------------------------------------
+# Text Splitting Functions
 
 def split_into_sentences(df):
   """
@@ -334,8 +341,8 @@ def split_into_sentences(df):
   sentences = nltk.sent_tokenize(text)  # Split the text into sentences
   return pd.DataFrame(sentences, columns=['text'])
 
-#-------------------------------------------------------------------------------------------------
-#Data aggregation functions
+# -------------------------------------------------------------------------------------------------
+# Data aggregation functions
 def top_percentile_mean(grouped_df, column_name, percentile=0.6):
     """
     Calculates the mean of values in the top percentile for each group in a pandas groupby object.
@@ -355,8 +362,8 @@ def top_percentile_mean(grouped_df, column_name, percentile=0.6):
 
     return pd.DataFrame(grouped_df.apply(top_mean))
 
-#--------------------------------------------------------------------------------------------
-#UI functions
+# --------------------------------------------------------------------------------------------
+# UI functions
 
 def configure(option): #DEPRECATED
     if option == "Keyword":
@@ -507,7 +514,6 @@ def gs_input_UI():
             final_url = f"{base_url}{author_string}&btnG="
             return final_url
 
-
         username = 'INSERT_USER'
         password = 'INSERT_PASSWORD'
         proxy_host = 'pr.oxylabs.io'
@@ -559,7 +565,7 @@ def gs_input_UI():
 
         profile_link = "https://scholar.google.com" + extracted_data[0]
 
-        #Getting list of publications
+        # Getting list of publications
         driver.get(profile_link)
 
         html_content = driver.page_source
@@ -582,14 +588,14 @@ def gs_input_UI():
                     link_pub = link_tag_pub.get('href')
                     extracted_data.append(link_pub)
                     title_pub = link_tag_pub.get_text(strip=True)
-            
+
             if title_pub and link_pub: # Add to list if at least one field was found
                 publication_list.append({
                     "pub_title": title_pub,
                     "pub_link": link_pub
                 })
         return publication_list, driver
-    
+
     def get_publication_text(selected_publications, driver):
         base_url = 'https://scholar.google.com'
         modified_links = []
@@ -613,16 +619,16 @@ def gs_input_UI():
                 pub_page_title_html = title_divs.find('a')
                 if pub_page_title_html:
                     pub_page_title = pub_page_title_html.get_text(strip=True)
-            
+
             abstract_divs = pub_soup.find(id='gsc_oci_descr')
             if abstract_divs:
                 abstract_text = abstract_divs.get_text(strip=True)
 
             concat_text = pub_page_title + ": " + abstract_text
             publication_data.append({'Title': pub_page_title, 'Abstract': abstract_text})
-        
+
         return publication_data
-        
+
     st.sidebar.title("Author Search")
 
     # Get the search query from the user
@@ -642,7 +648,6 @@ def gs_input_UI():
                 publication for publication in publication_list if publication["pub_title"] in titles_to_search
             ]
 
-
             pub_data = get_publication_text(selected_publications=selected_publications, driver=current_driver)
 
             st.session_state.prompt_items['Google Scholar'] = pd.DataFrame(pub_data)
@@ -654,8 +659,983 @@ def gs_input_UI():
                     st.warning("Select at least one abstract!", icon="⚠️")
         except:
             st.write('Unable to retrieve author publications. Try ensuring the author name and institution are spelled correctly.')
-#----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------------
+# Profile document upload: resume, CV, LinkedIn PDF, DOCX, TXT
 
+
+def clean_profile_text(text, max_chars=12000):
+    """Clean and limit long text before embedding search."""
+    if not text:
+        return ""
+
+    text = re.sub(r"\s+", " ", str(text)).strip()
+
+    if len(text) > max_chars:
+        text = text[:max_chars]
+
+    return text
+
+
+def clean_extracted_pdf_text(text):
+    """
+    Clean text extracted from PDFs.
+    Helps with weird spacing, repeated blank lines, and broken line wrapping.
+    """
+    if not text:
+        return ""
+
+    # Normalize line endings
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Remove excessive spaces/tabs
+    text = re.sub(r"[ \t]+", " ", text)
+
+    # Join hyphenated line breaks: recommen-\ndation -> recommendation
+    text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
+
+    # Convert many blank lines to max two
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # Clean spaces around newlines
+    text = re.sub(r" *\n *", "\n", text)
+
+    return text.strip()
+
+
+def extract_text_from_pdf_with_pymupdf(uploaded_file):
+    """
+    Extract PDF text using PyMuPDF.
+    Usually better than pypdf for resumes and web-generated PDFs.
+    """
+    if fitz is None:
+        return ""
+
+    try:
+        file_bytes = uploaded_file.getvalue()
+        doc = fitz.open(stream=file_bytes, filetype="pdf")
+
+        pages_text = []
+
+        for page_number, page in enumerate(doc, start=1):
+            # "text" is simple and usually reliable.
+            page_text = page.get_text("text")
+
+            if page_text and page_text.strip():
+                pages_text.append(f"\n--- Page {page_number} ---\n{page_text}")
+
+        doc.close()
+
+        return clean_extracted_pdf_text("\n".join(pages_text))
+
+    except Exception:
+        return ""
+
+
+def extract_text_from_pdf_with_pdfplumber(uploaded_file):
+    """
+    Extract PDF text using pdfplumber.
+    Good fallback for layout-heavy PDFs.
+    """
+    if pdfplumber is None:
+        return ""
+
+    try:
+        uploaded_file.seek(0)
+
+        pages_text = []
+
+        with pdfplumber.open(uploaded_file) as pdf:
+            for page_number, page in enumerate(pdf.pages, start=1):
+                page_text = page.extract_text(
+                    x_tolerance=1, y_tolerance=3, layout=False
+                )
+
+                if page_text and page_text.strip():
+                    pages_text.append(f"\n--- Page {page_number} ---\n{page_text}")
+
+        return clean_extracted_pdf_text("\n".join(pages_text))
+
+    except Exception:
+        return ""
+
+
+def extract_text_from_pdf_with_pypdf(uploaded_file):
+    """
+    Extract PDF text using pypdf.
+    Basic fallback.
+    """
+    try:
+        uploaded_file.seek(0)
+
+        pdf_reader = PdfReader(uploaded_file)
+        pages_text = []
+
+        for page_number, page in enumerate(pdf_reader.pages, start=1):
+            page_text = page.extract_text()
+
+            if page_text and page_text.strip():
+                pages_text.append(f"\n--- Page {page_number} ---\n{page_text}")
+
+        return clean_extracted_pdf_text("\n".join(pages_text))
+
+    except Exception:
+        return ""
+
+
+def extract_text_from_pdf(uploaded_file):
+    """
+    Best-effort PDF extraction:
+    1. PyMuPDF
+    2. pdfplumber
+    3. pypdf
+
+    Returns the best available extracted text.
+    """
+
+    if uploaded_file is None:
+        return ""
+
+    # Keep track of extraction attempts.
+    extraction_results = []
+
+    # 1. Try PyMuPDF
+    uploaded_file.seek(0)
+    pymupdf_text = extract_text_from_pdf_with_pymupdf(uploaded_file)
+    if pymupdf_text:
+        extraction_results.append(("PyMuPDF", pymupdf_text))
+
+    # 2. Try pdfplumber
+    uploaded_file.seek(0)
+    pdfplumber_text = extract_text_from_pdf_with_pdfplumber(uploaded_file)
+    if pdfplumber_text:
+        extraction_results.append(("pdfplumber", pdfplumber_text))
+
+    # 3. Try pypdf
+    uploaded_file.seek(0)
+    pypdf_text = extract_text_from_pdf_with_pypdf(uploaded_file)
+    if pypdf_text:
+        extraction_results.append(("pypdf", pypdf_text))
+
+    if not extraction_results:
+        st.sidebar.error(
+            "Could not extract text from this PDF. It may be scanned/image-based."
+        )
+        return ""
+
+    # Pick the extraction with the most text.
+    # For prototype this is usually good enough.
+    best_tool, best_text = max(extraction_results, key=lambda item: len(item[1]))
+
+    st.sidebar.caption(f"PDF text extracted using: {best_tool}")
+
+    return best_text
+
+
+def extract_text_from_docx(uploaded_file):
+    """Extract text from an uploaded DOCX file."""
+    text = ""
+
+    try:
+        file_bytes = uploaded_file.read()
+        doc = Document(io.BytesIO(file_bytes))
+
+        for paragraph in doc.paragraphs:
+            if paragraph.text.strip():
+                text += paragraph.text + "\n"
+
+    except Exception as e:
+        st.sidebar.error(f"Could not read DOCX: {e}")
+
+    return text.strip()
+
+
+def extract_text_from_txt(uploaded_file):
+    """Extract text from an uploaded TXT file."""
+    try:
+        return uploaded_file.read().decode("utf-8").strip()
+    except UnicodeDecodeError:
+        uploaded_file.seek(0)
+        return uploaded_file.read().decode("latin-1").strip()
+    except Exception as e:
+        st.sidebar.error(f"Could not read TXT: {e}")
+        return ""
+
+
+def extract_text_from_profile_document(uploaded_file):
+    """Route profile document upload to the right parser."""
+    if uploaded_file is None:
+        return ""
+
+    file_name = uploaded_file.name.lower()
+
+    if file_name.endswith(".pdf"):
+        return extract_text_from_pdf(uploaded_file)
+
+    if file_name.endswith(".docx"):
+        return extract_text_from_docx(uploaded_file)
+
+    if file_name.endswith(".txt"):
+        return extract_text_from_txt(uploaded_file)
+
+    st.sidebar.warning("Unsupported document type. Upload PDF, DOCX, or TXT.")
+    return ""
+
+
+@st.cache_data
+def load_recommendation_taxonomy(
+    filepath="./Datasets/Taxonomy/recommendation_terms.csv",
+):
+    """
+    Load skills, topics, and methods from a CSV taxonomy file.
+
+    Expected columns:
+    - term
+    - category
+    - aliases
+
+    aliases should be separated by semicolons.
+    """
+    try:
+        taxonomy_df = pd.read_csv(filepath)
+    except Exception as e:
+        st.warning(f"Could not load taxonomy file: {e}")
+        return pd.DataFrame(columns=["term", "category", "aliases"])
+
+    required_columns = {"term", "category", "aliases"}
+
+    if not required_columns.issubset(set(taxonomy_df.columns)):
+        st.warning("Taxonomy file must include term, category, and aliases columns.")
+        return pd.DataFrame(columns=["term", "category", "aliases"])
+
+    taxonomy_df["term"] = taxonomy_df["term"].astype(str).str.strip()
+    taxonomy_df["category"] = (
+        taxonomy_df["category"].astype(str).str.strip().str.lower()
+    )
+    taxonomy_df["aliases"] = taxonomy_df["aliases"].fillna("").astype(str)
+
+    taxonomy_df = taxonomy_df[taxonomy_df["term"] != ""]
+
+    return taxonomy_df
+
+
+def extract_rule_based_interests(
+    text, taxonomy_path="./Datasets/Taxonomy/recommendation_terms.csv"
+):
+    """
+    Extract skills, topics, and methods using an external taxonomy CSV.
+    """
+    if not text:
+        return {
+            "skills": [],
+            "topics": [],
+            "methods": [],
+        }
+
+    taxonomy_df = load_recommendation_taxonomy(taxonomy_path)
+
+    if taxonomy_df.empty:
+        return {
+            "skills": [],
+            "topics": [],
+            "methods": [],
+        }
+
+    text_lower = text.lower()
+
+    extracted = {
+        "skill": [],
+        "topic": [],
+        "method": [],
+    }
+
+    for _, row in taxonomy_df.iterrows():
+        term = row["term"]
+        category = row["category"]
+        aliases = row["aliases"]
+
+        search_terms = [term]
+
+        if aliases:
+            search_terms.extend(
+                [alias.strip() for alias in aliases.split(";") if alias.strip()]
+            )
+
+        found = False
+
+        for search_term in search_terms:
+            pattern = r"\b" + re.escape(search_term.lower()) + r"\b"
+
+            if re.search(pattern, text_lower):
+                found = True
+                break
+
+        if found and category in extracted:
+            extracted[category].append(term)
+
+    return {
+        "skills": sorted(list(set(extracted["skill"]))),
+        "topics": sorted(list(set(extracted["topic"]))),
+        "methods": sorted(list(set(extracted["method"]))),
+    }
+
+
+def doc_upload_input_UI():
+    """
+    Sidebar UI for resume, CV, LinkedIn PDF, project document, DOCX, or TXT upload.
+    Keep LinkedIn PDF here instead of making it its own feature.
+    """
+
+    st.sidebar.header("Upload Profile Document")
+
+    with st.sidebar.expander("What can I upload?"):
+        st.write("""
+            Use this option for:
+            - Resume or CV
+            - LinkedIn PDF
+            - Project description
+            - Personal bio
+            - DOCX or TXT profile text
+            """)
+
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload PDF, DOCX, or TXT",
+        type=["pdf", "docx", "txt"],
+        key="profile_document_upload",
+    )
+
+    pasted_extra_text = st.sidebar.text_area(
+        "Optional: add missing projects or interests",
+        height=120,
+        placeholder="Example: I am interested in recommendation systems, NLP, semantic search, healthcare AI...",
+        key="profile_document_extra_text",
+    )
+
+    if "profile_doc_text" not in st.session_state:
+        st.session_state.profile_doc_text = ""
+
+    if "profile_doc_interests" not in st.session_state:
+        st.session_state.profile_doc_interests = {
+            "skills": [],
+            "topics": [],
+            "methods": [],
+        }
+
+    if st.sidebar.button("Extract Profile Document", key="extract_profile_document"):
+        if uploaded_file is None and not pasted_extra_text.strip():
+            st.sidebar.warning("Upload a file or paste some text first.", icon="⚠️")
+            return
+
+        extracted_text = ""
+
+        if uploaded_file is not None:
+            extracted_text = extract_text_from_profile_document(uploaded_file)
+
+        combined_text = f"{extracted_text}\n\n{pasted_extra_text}"
+        combined_text = clean_profile_text(combined_text)
+
+        if not combined_text:
+            st.sidebar.error("No usable text could be extracted.")
+            return
+
+        st.session_state.profile_doc_text = combined_text
+        st.session_state.profile_doc_interests = extract_rule_based_interests(
+            combined_text
+        )
+        st.sidebar.success("Profile document extracted.")
+
+    if st.session_state.profile_doc_text:
+        with st.sidebar.expander("Review extracted interests", expanded=True):
+            extracted = st.session_state.profile_doc_interests
+
+            skills_text = st.text_area(
+                "Skills",
+                value=", ".join(extracted.get("skills", [])),
+                key="profile_doc_skills",
+                help="Edit these. Separate with commas.",
+            )
+
+            topics_text = st.text_area(
+                "Topics",
+                value=", ".join(extracted.get("topics", [])),
+                key="profile_doc_topics",
+                help="Edit these. Separate with commas.",
+            )
+
+            methods_text = st.text_area(
+                "Methods",
+                value=", ".join(extracted.get("methods", [])),
+                key="profile_doc_methods",
+                help="Edit these. Separate with commas.",
+            )
+
+            goal_text = st.text_area(
+                "Optional: anything you want to prioritize or avoid?",
+                value="",
+                key="profile_doc_goal",
+                placeholder="Example: Prioritize NLP and recommendation systems. Avoid beginner-level sessions.",
+            )
+
+        with st.sidebar.expander("View extracted document text"):
+            st.text_area(
+                "Document text preview",
+                value=st.session_state.profile_doc_text[:4000],
+                height=250,
+                disabled=True,
+                key="profile_doc_text_preview",
+            )
+
+        skills = [x.strip() for x in skills_text.split(",") if x.strip()]
+        topics = [x.strip() for x in topics_text.split(",") if x.strip()]
+        methods = [x.strip() for x in methods_text.split(",") if x.strip()]
+
+        final_profile_query = f"""
+        User professional background:
+        {st.session_state.profile_doc_text}
+
+        Extracted skills:
+        {", ".join(skills)}
+
+        Extracted topics:
+        {", ".join(topics)}
+
+        Extracted methods:
+        {", ".join(methods)}
+
+        User conference goal:
+        {goal_text}
+        """
+
+        final_profile_query = clean_profile_text(final_profile_query)
+
+        st.session_state.prompt_items["Upload Profile Document"] = [final_profile_query]
+
+        if st.sidebar.button(
+            f"✅ {st.session_state.searchButtonLabel}", key="button_profile_doc_search"
+        ):
+            if final_profile_query.strip():
+                st.session_state.search_triggered = True
+            else:
+                st.warning("No profile text available.", icon="⚠️")
+
+
+# --------------------------------------------------------------------------------------------
+# Google Scholar CSV upload + OpenAlex enrichment
+
+
+def reconstruct_openalex_abstract(abstract_inverted_index):
+    """
+    OpenAlex abstracts are often returned as an inverted index:
+    {word: [positions]}.
+    This reconstructs the readable abstract text.
+    """
+    if not isinstance(abstract_inverted_index, dict):
+        return ""
+
+    position_to_word = {}
+
+    for word, positions in abstract_inverted_index.items():
+        if isinstance(positions, list):
+            for position in positions:
+                position_to_word[position] = word
+
+    if not position_to_word:
+        return ""
+
+    words = [position_to_word[i] for i in sorted(position_to_word.keys())]
+    return " ".join(words)
+
+
+def normalize_title_for_match(title):
+    """Normalize a title for rough matching."""
+    if not title:
+        return ""
+
+    title = str(title).lower()
+    title = re.sub(r"[^a-z0-9\s]", " ", title)
+    title = re.sub(r"\s+", " ", title)
+    return title.strip()
+
+
+def simple_title_similarity(title_a, title_b):
+    """
+    Lightweight title match score for prototype.
+    Returns Jaccard overlap between normalized title tokens.
+    """
+    tokens_a = set(normalize_title_for_match(title_a).split())
+    tokens_b = set(normalize_title_for_match(title_b).split())
+
+    if not tokens_a or not tokens_b:
+        return 0.0
+
+    return len(tokens_a.intersection(tokens_b)) / len(tokens_a.union(tokens_b))
+
+
+def normalize_author_name(name):
+    """Normalize author names for rough matching."""
+    if not name:
+        return ""
+
+    name = str(name).lower()
+    name = re.sub(r"[^a-z\s]", " ", name)
+    name = re.sub(r"\s+", " ", name).strip()
+
+    return name
+
+
+def parse_csv_authors(authors_text):
+    """
+    Parse Google Scholar CSV Authors field.
+
+    Example:
+    "Agarwal, Puneet; Tang, Junlin; Zhuang, Jun;"
+    """
+    if not authors_text or pd.isna(authors_text):
+        return []
+
+    authors = []
+
+    for author in str(authors_text).split(";"):
+        author = normalize_author_name(author)
+
+        if author:
+            authors.append(author)
+
+    return authors
+
+
+def get_openalex_author_names(work):
+    """Extract normalized author names from an OpenAlex work."""
+    if not isinstance(work, dict):
+        return []
+
+    authorships = work.get("authorships", [])
+    author_names = []
+
+    for authorship in authorships:
+        author = authorship.get("author", {})
+
+        display_name = author.get("display_name", "")
+        normalized = normalize_author_name(display_name)
+
+        if normalized:
+            author_names.append(normalized)
+
+    return author_names
+
+
+def author_name_match(csv_author, openalex_author):
+    """
+    Rough author matching.
+
+    Handles cases like:
+    - csv: "agarwal puneet"
+    - openalex: "puneet agarwal"
+
+    We mainly care whether last names overlap.
+    """
+    csv_tokens = set(normalize_author_name(csv_author).split())
+    openalex_tokens = set(normalize_author_name(openalex_author).split())
+
+    if not csv_tokens or not openalex_tokens:
+        return False
+
+    # Strong signal: any token overlap with length > 2.
+    # This usually catches last names.
+    overlap = {
+        token for token in csv_tokens.intersection(openalex_tokens) if len(token) > 2
+    }
+
+    return len(overlap) > 0
+
+
+def author_overlap_score(csv_authors_text, openalex_work):
+    """
+    Score how many CSV authors appear in the OpenAlex work.
+
+    Returns a value between 0 and 1.
+    """
+    csv_authors = parse_csv_authors(csv_authors_text)
+    openalex_authors = get_openalex_author_names(openalex_work)
+
+    if not csv_authors or not openalex_authors:
+        return 0.0
+
+    matched_count = 0
+
+    for csv_author in csv_authors:
+        for openalex_author in openalex_authors:
+            if author_name_match(csv_author, openalex_author):
+                matched_count += 1
+                break
+
+    return matched_count / len(csv_authors)
+
+
+@st.cache_data(show_spinner=False)
+def search_openalex_by_title(title, year=None, authors="", mailto=""):
+    """
+    Search OpenAlex Works by title and return the best matching work.
+
+    Match score uses:
+    - title similarity
+    - publication year match
+    - author overlap
+    """
+    if not title:
+        return None
+
+    params = {
+        "search": title,
+        "per-page": 5,
+    }
+
+    if mailto:
+        params["mailto"] = mailto
+
+    try:
+        response = requests.get(
+            "https://api.openalex.org/works",
+            params=params,
+            timeout=12,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        return None
+
+    results = data.get("results", [])
+
+    if not results:
+        return None
+
+    best_openalex_work = None
+    best_score = 0.0
+
+    for openalex_work in results:
+        openalex_title = openalex_work.get("title", "")
+
+        title_score = simple_title_similarity(title, openalex_title)
+        author_score = author_overlap_score(authors, openalex_work)
+
+        year_score = 0.0
+        if year is not None and str(openalex_work.get("publication_year", "")) == str(
+            year
+        ):
+            year_score = 1.0
+
+        # Weighted matching score.
+        # Title is most important, authors are second, year is a small boost.
+        total_score = 0.70 * title_score + 0.20 * author_score + 0.10 * year_score
+
+        if total_score > best_score:
+            best_score = total_score
+            best_openalex_work = openalex_work
+
+    # Minimum confidence threshold.
+    # If authors match, allow a little lower title score.
+    if best_score < 0.35:
+        return None
+
+    return best_openalex_work
+
+
+def read_google_scholar_csv(uploaded_file):
+    """
+    Read Google Scholar CSV.
+    Expected columns:
+    Authors, Title, Publication, Volume, Number, Pages, Year, Publisher
+    """
+    try:
+        df = pd.read_csv(uploaded_file)
+    except Exception as e:
+        st.sidebar.error(f"Could not read CSV: {e}")
+        return pd.DataFrame()
+
+    if df.empty:
+        return pd.DataFrame()
+
+    df.columns = [str(col).strip() for col in df.columns]
+
+    if "Title" not in df.columns:
+        st.sidebar.error("This CSV needs a Title column.")
+        return pd.DataFrame()
+
+    keep_cols = [
+        col
+        for col in [
+            "Authors",
+            "Title",
+            "Publication",
+            "Year",
+            "Publisher",
+        ]
+        if col in df.columns
+    ]
+
+    df = df[keep_cols].copy()
+    df = df.dropna(subset=["Title"])
+    df["Title"] = df["Title"].astype(str).str.strip()
+    df = df[df["Title"] != ""]
+
+    return df
+
+
+def enrich_google_scholar_df_with_openalex(df, max_papers=15, mailto=""):
+    """
+    Enrich Google Scholar CSV rows with OpenAlex title and abstract.
+    Uses fallback to CSV title if no OpenAlex match is found.
+    """
+    enriched_rows = []
+
+    rows_to_process = df.head(max_papers)
+
+    progress = st.sidebar.progress(0)
+    status = st.sidebar.empty()
+
+    total = len(rows_to_process)
+
+    for i, (_, row) in enumerate(rows_to_process.iterrows(), start=1):
+        title = row.get("Title", "")
+        year = row.get("Year", None)
+
+        status.write(f"Searching OpenAlex {i}/{total}: {title[:60]}...")
+
+        authors = row.get("Authors", "")
+
+        work = search_openalex_by_title(
+            title=title,
+            year=year,
+            authors=authors,
+            mailto=mailto,
+        )
+
+        abstract = ""
+        openalex_title = ""
+
+        if work:
+            openalex_title = work.get("title", "")
+            abstract = reconstruct_openalex_abstract(
+                work.get("abstract_inverted_index")
+            )
+
+        enriched_rows.append(
+            {
+                "selected": True,
+                "csv_title": title,
+                "openalex_title": openalex_title,
+                "abstract": abstract,
+                "authors": row.get("Authors", ""),
+                "publication": row.get("Publication", ""),
+                "year": row.get("Year", ""),
+                "publisher": row.get("Publisher", ""),
+                "openalex_found": bool(work),
+                "has_abstract": bool(abstract),
+            }
+        )
+
+        progress.progress(i / total)
+        time.sleep(0.1)
+
+    status.empty()
+    progress.empty()
+
+    return pd.DataFrame(enriched_rows)
+
+
+def build_google_scholar_profile_query(enriched_df, extra_goal_text=""):
+    """Build final text query from enriched Google Scholar publications."""
+    if enriched_df.empty:
+        return ""
+
+    text_chunks = []
+
+    for _, row in enriched_df.iterrows():
+        if "selected" in row and not bool(row["selected"]):
+            continue
+
+        title = row.get("openalex_title") or row.get("csv_title") or ""
+        abstract = row.get("abstract") or ""
+
+        parts = []
+
+        if title:
+            parts.append(f"Publication title: {title}.")
+
+        if row.get("publication"):
+            parts.append(f"Venue or journal: {row.get('publication')}.")
+
+        if row.get("year"):
+            parts.append(f"Year: {row.get('year')}.")
+
+        if row.get("authors"):
+            parts.append(f"Authors: {row.get('authors')}.")
+
+        if abstract:
+            parts.append(f"Abstract: {abstract}.")
+
+        text_chunks.append(" ".join(parts))
+
+    final_text = "\n\n".join(text_chunks)
+
+    if extra_goal_text:
+        final_text += f"\n\nUser conference goal: {extra_goal_text}"
+
+    return clean_profile_text(final_text, max_chars=20000)
+
+
+def gs_csv_input_UI():
+    """
+    Sidebar UI for Google Scholar CSV upload.
+    This replaces the old Selenium/proxy Google Scholar profile scraping flow.
+    """
+
+    st.sidebar.header("Upload Google Scholar CSV")
+
+    with st.sidebar.expander("How to get your Google Scholar CSV"):
+        st.write("""
+            1. Go to your Google Scholar profile.
+            2. Select the publications you want to use.
+            3. Click Export.
+            4. Choose CSV.
+            5. Upload that CSV here.
+
+            Expected columns include Authors, Title, Publication, Year, and Publisher.
+            """)
+
+    uploaded_csv = st.sidebar.file_uploader(
+        "Upload Google Scholar CSV",
+        type=["csv"],
+        key="google_scholar_csv_upload",
+    )
+
+    max_papers = st.sidebar.slider(
+        "Max publications to enrich",
+        min_value=1,
+        max_value=30,
+        value=10,
+        step=1,
+        help="For the prototype, keep this lower so OpenAlex lookup is faster.",
+    )
+
+    goal_text = st.sidebar.text_area(
+        "Optional: anything you want to prioritize or avoid?",
+        height=100,
+        placeholder="Example: Prioritize applied AI sessions. Avoid beginner-level talks.",
+        key="gs_csv_goal",
+    )
+    
+    mailto = ""
+
+    if "gs_csv_raw_df" not in st.session_state:
+        st.session_state.gs_csv_raw_df = pd.DataFrame()
+
+    if "gs_csv_enriched_df" not in st.session_state:
+        st.session_state.gs_csv_enriched_df = pd.DataFrame()
+
+    if st.sidebar.button("Read Google Scholar CSV", key="read_gs_csv"):
+        if uploaded_csv is None:
+            st.sidebar.warning("Upload a Google Scholar CSV first.", icon="⚠️")
+            return
+
+        df = read_google_scholar_csv(uploaded_csv)
+
+        if df.empty:
+            st.sidebar.error("No valid publications found in the CSV.")
+            return
+
+        st.session_state.gs_csv_raw_df = df
+        st.sidebar.success(f"Found {len(df)} publications.")
+
+    if not st.session_state.gs_csv_raw_df.empty:
+        with st.sidebar.expander("CSV publications preview", expanded=False):
+            st.dataframe(
+                st.session_state.gs_csv_raw_df.head(max_papers),
+                use_container_width=True,
+            )
+
+        if st.sidebar.button(
+            "Find abstracts with OpenAlex", key="enrich_gs_csv_openalex"
+        ):
+            with st.spinner("Searching OpenAlex for abstracts..."):
+                enriched_df = enrich_google_scholar_df_with_openalex(
+                    st.session_state.gs_csv_raw_df,
+                    max_papers=max_papers,
+                    mailto=mailto,
+                )
+
+            st.session_state.gs_csv_enriched_df = enriched_df
+
+            found_count = (
+                int(enriched_df["openalex_found"].sum()) if not enriched_df.empty else 0
+            )
+            abstract_count = (
+                int(enriched_df["has_abstract"].sum()) if not enriched_df.empty else 0
+            )
+
+            st.sidebar.success(
+                f"OpenAlex found {found_count} matches; {abstract_count} had abstracts."
+            )
+
+    if not st.session_state.gs_csv_enriched_df.empty:
+        st.sidebar.write("Review selected publications:")
+
+        edited_df = st.sidebar.data_editor(
+            st.session_state.gs_csv_enriched_df,
+            column_config={
+                "selected": st.column_config.CheckboxColumn(
+                    "Use",
+                    default=True,
+                ),
+                "csv_title": "CSV Title",
+                "openalex_title": "OpenAlex Title",
+                "abstract": st.column_config.TextColumn(
+                    "Abstract",
+                    width="medium",
+                ),
+                "openalex_found": "Found",
+                "has_abstract": "Has Abstract",
+            },
+            disabled=[
+                "csv_title",
+                "openalex_title",
+                "abstract",
+                "authors",
+                "publication",
+                "year",
+                "publisher",
+                "openalex_found",
+                "has_abstract",
+            ],
+            hide_index=True,
+            key="gs_csv_editor",
+        )
+
+        final_query = build_google_scholar_profile_query(
+            edited_df,
+            extra_goal_text=goal_text,
+        )
+
+        st.session_state.prompt_items["Upload Google Scholar CSV"] = [final_query]
+
+        with st.sidebar.expander("View final research profile text"):
+            st.text_area(
+                "Research profile text",
+                value=final_query[:5000],
+                height=250,
+                disabled=True,
+                key="gs_csv_final_text_preview",
+            )
+
+        if st.sidebar.button(
+            f"✅ {st.session_state.searchButtonLabel}", key="button_gs_csv_search"
+        ):
+            if final_query.strip():
+                st.session_state.search_triggered = True
+            else:
+                st.warning("No research profile text available.", icon="⚠️")
+
+# -------------------------------------------------------------
 def show_output_UI(output_df, session_level_agg = False, calendar = False, scholar_df = None):
     score_dict = {'Excellent': 0.78,
                 'Great': 0.75,
@@ -752,4 +1732,3 @@ def display_results(output_df, pres_df = None, session_level_agg = False, n_resu
                         st.write(f"Most relevant to:  {prow['related_title']}")
                     st.write(f"**Abstract**: {prow['abstract']}")
                     j = j + 1
-                    
