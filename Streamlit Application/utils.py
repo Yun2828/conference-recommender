@@ -1004,12 +1004,6 @@ def doc_upload_input_UI():
         key="profile_document_upload",
     )
 
-    pasted_extra_text = st.sidebar.text_area(
-        "Optional: add missing projects or interests",
-        height=120,
-        placeholder="Example: I am interested in recommendation systems, NLP, semantic search, healthcare AI...",
-        key="profile_document_extra_text",
-    )
 
     if "profile_doc_text" not in st.session_state:
         st.session_state.profile_doc_text = ""
@@ -1022,8 +1016,8 @@ def doc_upload_input_UI():
         }
 
     if st.sidebar.button("Extract Profile Document", key="extract_profile_document"):
-        if uploaded_file is None and not pasted_extra_text.strip():
-            st.sidebar.warning("Upload a file or paste some text first.", icon="⚠️")
+        if uploaded_file is None:
+            st.sidebar.warning("Upload a file first.", icon="⚠️")
             return
 
         extracted_text = ""
@@ -1031,8 +1025,7 @@ def doc_upload_input_UI():
         if uploaded_file is not None:
             extracted_text = extract_text_from_profile_document(uploaded_file)
 
-        combined_text = f"{extracted_text}\n\n{pasted_extra_text}"
-        combined_text = clean_profile_text(combined_text)
+        combined_text = clean_profile_text(extracted_text)
 
         if not combined_text:
             st.sidebar.error("No usable text could be extracted.")
@@ -1069,12 +1062,6 @@ def doc_upload_input_UI():
                 help="Edit these. Separate with commas.",
             )
 
-            goal_text = st.text_area(
-                "Optional: anything you want to prioritize or avoid?",
-                value="",
-                key="profile_doc_goal",
-                placeholder="Example: Prioritize NLP and recommendation systems. Avoid beginner-level sessions.",
-            )
 
         with st.sidebar.expander("View extracted document text"):
             st.text_area(
@@ -1101,9 +1088,6 @@ def doc_upload_input_UI():
 
         Extracted methods:
         {", ".join(methods)}
-
-        User conference goal:
-        {goal_text}
         """
 
         final_profile_query = clean_profile_text(final_profile_query)
@@ -1612,8 +1596,7 @@ def gs_csv_input_UI():
         )
 
         final_query = build_google_scholar_profile_query(
-            edited_df,
-            extra_goal_text=goal_text,
+            edited_df
         )
 
         st.session_state.prompt_items["Upload Google Scholar CSV"] = [final_query]
