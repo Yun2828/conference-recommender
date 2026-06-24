@@ -9,8 +9,8 @@
 !README.docx
 
 # Keep Streamlit app folder
-!Streamlit Application/
-!Streamlit Application/**
+!Streamlit_application/
+!Streamlit_application/**
 
 # Keep Other Python Files folder
 !Other Python Files/
